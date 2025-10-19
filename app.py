@@ -1,106 +1,96 @@
-# app.py (BERT Enhanced Version - Final, Robust Version)
 import streamlit as st
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 import torch
 import os
 import numpy as np
 
-# --- Configuration (UPDATED FOR FINAL MODEL PATH) ---
-# Get the absolute path to the directory where app.py is located
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-# Construct the full path to the saved model directory (updated to match bert_train.py)
-LOCAL_MODEL_PATH = os.path.join(BASE_DIR, "bert_spam_detector_final") 
+# --- Configuration ---
+# *** IMPORTANT: REPLACE THIS PLACEHOLDER with your actual Hugging Face model repository ID ***
+# Example: "Vikram-P/sms-spam-detector-bert"
+LOCAL_MODEL_PATH = "Pugazh24/sms-spam-detector-bert" 
 id2label = {0: "HAM", 1: "SPAM"} 
+MODEL_NAME = "DistilBERT (Fine-Tuned)"
 
-# --- 1. Load the BERT Model and Tokenizer ---
-try:
-    # Use the calculated absolute path to guarantee local loading
-    tokenizer = AutoTokenizer.from_pretrained(LOCAL_MODEL_PATH)
-    model = AutoModelForSequenceClassification.from_pretrained(LOCAL_MODEL_PATH)
-    
-    # --- Load F1 Score for Display (Best Practice) ---
+# --- 1. Model Loading with Caching (CRITICAL FOR CLOUD DEPLOYMENT) ---
+@st.cache_resource
+def load_bert_artifacts(path):
+    """
+    Loads the BERT model and tokenizer directly from the Hugging Face Hub (HF).
+    Caching ensures the large model files are downloaded only once.
+    """
     try:
-        from transformers.trainer_utils import TrainerState
-        # Load trainer state from the absolute path
-        state_path = os.path.join(LOCAL_MODEL_PATH, "trainer_state.json")
-        if os.path.exists(state_path):
-            state = TrainerState.load_from_json(state_path)
-            # Default to the expected high score if the metric is not cleanly saved
-            best_f1 = state.best_metric if hasattr(state, 'best_metric') and state.best_metric is not None else 0.9634 
-        else:
-            best_f1 = 0.9634 # Fallback if file doesn't exist
-    except Exception:
-        best_f1 = 0.9634 # Fallback
+        # Loading directly from the Hugging Face Hub path
+        tokenizer = AutoTokenizer.from_pretrained(path)
+        model = AutoModelForSequenceClassification.from_pretrained(path)
         
-except Exception as e:
-    # Provide helpful diagnostic information in the error message
-    st.error(f"❌ Error loading BERT model/tokenizer.")
-    st.error(f"Please ensure the directory '{LOCAL_MODEL_PATH}' exists and contains model files.")
-    st.error(f"Hugging Face Error: {e}")
-    st.stop()
+        # Hardcoding the calculated F1 score for display, as metrics files aren't always available on the Hub
+        best_f1 = 0.9634  
+            
+        return tokenizer, model, best_f1
+    except Exception as e:
+        # Display this error if the app cannot fetch the model from the Hub
+        st.error(f"Failed to load model from Hugging Face Hub: {path}")
+        st.error("Please ensure the model repository exists and is public.")
+        st.exception(e)
+        return None, None, 0.0
 
-# --- 2. Device Setup ---
-# Check for GPU (cuda) or default to CPU
+tokenizer, model, best_f1 = load_bert_artifacts(LOCAL_MODEL_PATH)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model.to(device)
-model.eval() # Set model to evaluation mode
 
+if model:
+    model.to(device)
+    model.eval()
+    
+    # --- 3. Streamlit Web Interface ---
+    st.set_page_config(page_title="BERT Spam Detector", layout="centered")
+    st.title("🚀 BERT Enhanced SMS Spam Detector")
+    st.markdown("---")
+    st.info(f"Model: **{MODEL_NAME}** | Expected Performance (F1-Score): **{best_f1:.4f}**")
+    
 
-# --- 3. Streamlit Web Interface ---
-st.set_page_config(page_title="BERT Spam Detector", layout="centered")
-st.title("🚀 BERT Enhanced SMS Spam Detector")
-st.markdown("---")
-st.markdown(f"""
-    This advanced system uses **DistilBERT** fine-tuned on the SMS dataset.
-    **Expected Performance (F1-Score):** **{best_f1:.4f}**
-""")
+    # Text input box for the user
+    sms_input = st.text_area(
+        "Enter the SMS Message:", 
+        height=150, 
+        placeholder="Example: URGENT! You have won a £1000 prize! Txt CLAIM to 81010 now!"
+    )
 
-# Text input box for the user
-sms_input = st.text_area(
-    "Enter the SMS Message:", 
-    height=150, 
-    placeholder="Example: URGENT! You have won a £1000 prize! Txt CLAIM to 81010 now!"
-)
+    if st.button('Classify SMS', type="primary"):
+        if sms_input:
+            with st.spinner('Classifying with DistilBERT...'):
+                # 1. Tokenize the input
+                inputs = tokenizer(
+                    sms_input,
+                    truncation=True,
+                    padding="max_length",
+                    max_length=512, 
+                    return_tensors="pt"
+                )
+                
+                inputs = {k: v.to(device) for k, v in inputs.items()}
 
-if st.button('Classify SMS', type="primary"):
-    if sms_input:
-        with st.spinner('Classifying with DistilBERT...'):
-            # 1. Tokenize the input
-            inputs = tokenizer(
-                sms_input,
-                truncation=True,
-                padding="max_length",
-                max_length=128,  # Updated to match training MAX_LENGTH
-                return_tensors="pt"
-            )
+                # 2. Predict the label
+                with torch.no_grad():
+                    outputs = model(**inputs)
+                    logits = outputs.logits
+                    prediction_id = torch.argmax(logits, dim=1).item()
+
+                # 3. Get the prediction and confidence score
+                prediction_label = id2label[prediction_id]
+                probabilities = torch.softmax(logits, dim=1).cpu().numpy()[0]
+                confidence = probabilities[prediction_id]
+
+                # 4. Display the result
+                if prediction_label == 'SPAM':
+                    st.error(f"**Classification: SPAM!** 🚨")
+                    st.markdown(f"**Confidence:** {confidence:.2%}")
+                    st.markdown("This message exhibits strong indicators of unsolicited or fraudulent content.")
+                else:
+                    st.success(f"**Classification: HAM (Legitimate)** ✅")
+                    st.markdown(f"**Confidence:** {confidence:.2%}")
+                    st.markdown("This message is highly likely to be legitimate.")
+        else:
+            st.info("Please enter a message to classify.")
             
-            # Move inputs to the correct device
-            inputs = {k: v.to(device) for k, v in inputs.items()}
-
-            # 2. Predict the label
-            with torch.no_grad():
-                outputs = model(**inputs)
-                logits = outputs.logits
-                prediction_id = torch.argmax(logits, dim=1).item()
-
-            # 3. Get the prediction and confidence score
-            prediction_label = id2label[prediction_id]
-            
-            # Calculate confidence score (softmax)
-            probabilities = torch.softmax(logits, dim=1).cpu().numpy()[0]
-            confidence = probabilities[prediction_id]
-
-            # 4. Display the result
-            if prediction_label == 'SPAM':
-                st.error(f"**Classification: SPAM!** 🚨")
-                st.markdown(f"**Confidence:** {confidence:.2%}")
-                st.markdown("This message exhibits strong indicators of unsolicited or fraudulent content.")
-            else:
-                st.success(f"**Classification: HAM (Legitimate)** ✅")
-                st.markdown(f"**Confidence:** {confidence:.2%}")
-                st.markdown("This message is highly likely to be legitimate.")
-    else:
-        st.info("Please enter a message to classify.")
-        
-st.markdown("---")
-st.caption("Project Enhanced by DistilBERT Transformer. Original Project by Vikram .P")
+    st.markdown("---")
+    st.caption("Project Enhanced by DistilBERT Transformer. Developed by Vikram .P and NAVEEN PRANAV J.")
