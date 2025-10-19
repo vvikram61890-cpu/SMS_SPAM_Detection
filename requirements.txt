@@ -1,0 +1,11 @@
+pandas
+numpy
+matplotlib
+seaborn
+scikit-learn
+nltk
+streamlit
+torch # PyTorch framework
+transformers # Hugging Face transformers library
+accelerate # Used by the Hugging Face Trainer for efficiency
+evaluate # Used for advanced metric calculation
