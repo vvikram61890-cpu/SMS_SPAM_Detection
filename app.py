@@ -93,4 +93,5 @@ if model:
             st.info("Please enter a message to classify.")
             
     st.markdown("---")
-    st.caption("Project Enhanced by DistilBERT Transformer. Developed by Vikram .P and NAVEEN PRANAV J.")
+    st.caption("Project Enhanced by DistilBERT Transformer. Developed by Vikram .P ")
+
